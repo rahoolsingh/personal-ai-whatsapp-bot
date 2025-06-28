@@ -3,3 +3,5 @@
 /trash
 /user_memory
 eng.traineddata
+.env
+out.pcm
