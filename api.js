@@ -140,7 +140,7 @@ app.post("/send-message", authMiddleware, async (req, res) => {
         // const [result] = await sock.onWhatsApp(jid);
         // if (!result?.exists) return res.status(404).json({ error: "Number not on WhatsApp" });
 
-        await sock.sendMessage(jid, { text: message });
+        await sock.sendMessage(jid, { text: `${message}\n\n ~ veerrajpoot.com` });
 
         console.log(`[SENT] To: ${mobileNumber} | Msg: "${message.substring(0, 20)}..."`);
 
