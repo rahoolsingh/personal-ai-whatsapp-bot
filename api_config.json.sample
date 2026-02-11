@@ -1,0 +1,10 @@
+{
+  "apiKeys": [
+    "secure_key_12345",
+    "generate_your_own_random_string_here"
+  ],
+  "allowedIPs": [
+    "::1",
+    "127.0.0.1"
+  ]
+}
