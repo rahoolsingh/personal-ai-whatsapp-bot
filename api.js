@@ -40,26 +40,32 @@ function loadConfig() {
 
 // Format Mobile Number (+91xxxx -> 91xxxx@s.whatsapp.net)
 function formatToJid(mobileNumber) {
-    let cleaned = mobileNumber.replace(/\D/g, ""); 
+    let cleaned = mobileNumber.replace(/\D/g, "");
     return `${cleaned}@s.whatsapp.net`;
 }
 
 // —— MIDDLEWARE ————————————————————————————————————
 const authMiddleware = (req, res, next) => {
     const config = loadConfig();
-    
-    // 1. IP Validation
-    const clientIp = req.ip || req.connection.remoteAddress;
-    const normalizedIp = clientIp === '::1' ? '127.0.0.1' : clientIp.replace(/^.*:/, ''); 
-    
-    const isIpAllowed = config.allowedIPs.includes(clientIp) || config.allowedIPs.includes(normalizedIp);
 
-    if (!isIpAllowed) {
-        console.warn(`[AUTH FAIL] Blocked IP: ${clientIp}`);
-        return res.status(403).json({ error: "Access Denied: IP not whitelisted" });
+    // 1. IP Validation (Modified)
+    const clientIp = req.ip || req.connection.remoteAddress;
+
+    // Check if we are allowing ALL IPs
+    const allowAllIPs = config.allowedIPs.includes("*");
+
+    if (!allowAllIPs) {
+        // Only check specific IPs if wildcard is NOT present
+        const normalizedIp = clientIp === '::1' ? '127.0.0.1' : clientIp.replace(/^.*:/, '');
+        const isIpAllowed = config.allowedIPs.includes(clientIp) || config.allowedIPs.includes(normalizedIp);
+
+        if (!isIpAllowed) {
+            console.warn(`[AUTH FAIL] Blocked IP: ${clientIp}`);
+            return res.status(403).json({ error: "Access Denied: IP not whitelisted" });
+        }
     }
 
-    // 2. API Key Validation
+    // 2. API Key Validation (Still Active)
     const apiKey = req.headers["x-api-key"];
     if (!apiKey || !config.apiKeys.includes(apiKey)) {
         console.warn(`[AUTH FAIL] Invalid Key from IP: ${clientIp}`);
@@ -68,7 +74,6 @@ const authMiddleware = (req, res, next) => {
 
     next();
 };
-
 // —— WHATSAPP LOGIC ————————————————————————————————
 async function startWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
@@ -89,7 +94,7 @@ async function startWhatsApp() {
 
     sock.ev.on("connection.update", (update) => {
         const { connection, lastDisconnect, qr } = update;
-        
+
         // Manual QR generation
         if (qr) {
             console.log("\nScan this QR Code to login:");
@@ -115,42 +120,42 @@ app.post("/send-message", authMiddleware, async (req, res) => {
     const { mobileNumber, message } = req.body;
 
     if (!mobileNumber || !message) {
-        return res.status(400).json({ 
-            success: false, 
-            error: "Missing 'mobileNumber' or 'message' in body" 
+        return res.status(400).json({
+            success: false,
+            error: "Missing 'mobileNumber' or 'message' in body"
         });
     }
 
     if (!sock) {
-        return res.status(503).json({ 
-            success: false, 
-            error: "WhatsApp service is not initializing" 
+        return res.status(503).json({
+            success: false,
+            error: "WhatsApp service is not initializing"
         });
     }
 
     try {
         const jid = formatToJid(mobileNumber);
-        
+
         // Check for existence (optional, adds delay)
         // const [result] = await sock.onWhatsApp(jid);
         // if (!result?.exists) return res.status(404).json({ error: "Number not on WhatsApp" });
 
         await sock.sendMessage(jid, { text: message });
-        
+
         console.log(`[SENT] To: ${mobileNumber} | Msg: "${message.substring(0, 20)}..."`);
-        
-        return res.json({ 
-            success: true, 
+
+        return res.json({
+            success: true,
             status: "Message sent successfully",
             to: mobileNumber
         });
 
     } catch (error) {
         console.error("Send Error:", error);
-        return res.status(500).json({ 
-            success: false, 
-            error: "Failed to send message", 
-            details: error.message 
+        return res.status(500).json({
+            success: false,
+            error: "Failed to send message",
+            details: error.message
         });
     }
 });
@@ -159,6 +164,6 @@ app.post("/send-message", authMiddleware, async (req, res) => {
 app.listen(PORT, () => {
     console.log(`🚀 API Server running on port ${PORT}`);
     console.log(`🔒 Edit 'api_config.json' to manage Access Keys and IPs`);
-    
+
     startWhatsApp();
 });
