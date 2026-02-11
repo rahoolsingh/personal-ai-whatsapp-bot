@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  whatsapp-api:
+    build: .
+    container_name: whatsapp-api
+    restart: unless-stopped
+    ports:
+      - "5004:3000" # Map port 3000 in the container to port 5004 on the host
+    volumes:
+      # Persist the WhatsApp session data to your host machine
+      - ./auth_info_baileys:/app/auth_info_baileys
+      # Link the config file so you can edit it without rebuilding
+      - ./api_config.json:/app/api_config.json
+    environment:
+      - NODE_ENV=production
