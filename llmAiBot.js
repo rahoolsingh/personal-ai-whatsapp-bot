@@ -109,7 +109,10 @@ async function getReply(jid, userMessage) {
     try {
         // EXACT Structure you requested
         const payload = {
-            contents: memory
+            contents: memory.map(msg => ({
+                role: msg.role,
+                parts: msg.parts.map(part => ({ text: part.text }))
+            }))
         };
 
         const res = await axios.post(
