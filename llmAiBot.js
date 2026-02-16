@@ -115,9 +115,8 @@ async function getReply(jid, userMessage) {
             })),
             // max 2 lines of output token
             generationConfig: {
-                maxOutputTokens: 100, // Approx 2 lines of text
+                maxOutputTokens: 500, // Approx 2 lines of text
                 temperature: 0.7, // Creativity
-                topP: 0.9, // Nucleus sampling - focus on top 90% of probability mass
             }
         };
 
