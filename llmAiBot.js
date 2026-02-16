@@ -98,25 +98,38 @@ function shouldSendVoice(messageLength, conversationHistory, isVoiceRequested = 
 async function generateTTS(text) {
     try {
         const cleanText = text.replace(/[*_~`]/g, "").trim();
-        const speechText = `Say in a warm and friendly tone: ${cleanText}`;
 
-        // NOTE: Ensure process.env.GEMINI_API_KEY is set in docker-compose.yml
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`;
+        // We use gemini-2.0-flash-exp specifically for consistent Audio Output support
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent`;
 
         const payload = {
-            contents: [{ parts: [{ text: speechText }] }],
-            generationConfig: { maxOutputTokens: 200, temperature: 0.9 }
+            contents: [{
+                parts: [{ text: `Say this in a natural, friendly Indian accent: ${cleanText}` }]
+            }],
+            generationConfig: {
+                responseModalities: ["AUDIO"], // <--- THIS IS CRITICAL
+                speechConfig: {
+                    voiceConfig: {
+                        prebuiltVoiceConfig: {
+                            voiceName: "Puck", // Options: Puck, Charon, Aoede, Fenrir, Leda
+                        },
+                    },
+                },
+            },
         };
 
         const res = await axios.post(url, payload, {
             headers: {
                 "Content-Type": "application/json",
                 "x-goog-api-key": process.env.GEMINI_API_KEY,
-
             }
         });
 
-        if (!res?.data?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) return null;
+        // Debug: Log if candidates are missing
+        if (!res?.data?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) {
+            console.error("TTS Response missing audio data:", JSON.stringify(res.data));
+            return null;
+        }
 
         const audioBuffer = Buffer.from(res.data.candidates[0].content.parts[0].inlineData.data, "base64");
         const tempPcm = path.join(tempDir, `tts_${Date.now()}.pcm`);
@@ -141,7 +154,7 @@ async function generateTTS(text) {
                 .save(tempOgg);
         });
     } catch (err) {
-        console.error("TTS Error:", err.message);
+        console.error("TTS Error:", err.response?.data || err.message);
         return null;
     }
 }
@@ -194,6 +207,7 @@ async function getReply(jid, annotatedMessage, senderName = "yaar") {
 
         const systemPart = memory.find(m => m.role === "system")?.content || "";
 
+        // Standard Text Generation
         const res = await axios.post(
             `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
             {
@@ -217,7 +231,8 @@ async function getReply(jid, annotatedMessage, senderName = "yaar") {
 
 // —— MAIN LOGIC EXPORT —————————————————————————————
 
-async function attachLlmAiLogic(sock) {
+// Renamed back to 'attachAiLogic' so api.js works without changes
+async function attachAiLogic(sock) {
     console.log("🤖 Enhanced Mohini AI Attached!");
     console.log(`🎭 Initial Mood: ${currentMood.toUpperCase()}`);
 
@@ -231,7 +246,6 @@ async function attachLlmAiLogic(sock) {
         const isGroup = sender.endsWith("@g.us");
         const botJid = selfJid();
 
-        // Skip status/broadcasts
         if (sender === "status@broadcast") return;
 
         let text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
@@ -243,20 +257,17 @@ async function attachLlmAiLogic(sock) {
         const ctx = msg.message.extendedTextMessage?.contextInfo || {};
         const mentioned = ctx.mentionedJid || [];
 
-        // Reset
         if (text.trim().toLowerCase() === "!reset") {
             await deleteUserMemory(sender);
             return sock.sendMessage(sender, { text: "🧹 Memory saaf! Fresh start! ✨" });
         }
 
-        // Decision to reply
         let shouldReply = !isGroup;
         if (isGroup) {
             if (mentioned.includes(botJid) || text.toLowerCase().includes("mohini")) shouldReply = true;
         }
         if (!shouldReply) return;
 
-        // Stats & Typing
         const stats = sessionStats.get(sender) || { name: msg.pushName || "yaar", count: 0, lastSeen: Date.now() };
         stats.count++;
         sessionStats.set(sender, stats);
@@ -264,34 +275,34 @@ async function attachLlmAiLogic(sock) {
 
         await sock.sendPresenceUpdate("composing", sender);
 
-        // Get Reply
         let annotated = text;
         if (isGroup) annotated = `<${msg.pushName}>: ${text}`;
 
         const reply = await getReply(sender, annotated, msg.pushName);
 
-        // Voice vs Text Decision
         const isVoiceRequested = checkVoiceRequest(text);
         let memory = await loadUserMemory(sender);
         const useVoice = shouldSendVoice(reply.length, memory, isVoiceRequested);
 
         if (useVoice) {
             await sock.sendPresenceUpdate("recording", sender);
+            console.log("🎙️ Generating Voice for:", reply.substring(0, 20) + "...");
             const audioPath = await generateTTS(reply);
 
             if (audioPath) {
                 await sock.sendMessage(sender, { audio: fs.readFileSync(audioPath), mimetype: "audio/ogg; codecs=opus", ptt: true }, { quoted: msg });
-                fs.unlinkSync(audioPath); // Cleanup
+                fs.unlinkSync(audioPath);
 
-                // Update memory type
                 memory = await loadUserMemory(sender);
                 if (memory.length) memory[memory.length - 1].type = "voice";
                 await saveUserMemory(sender, memory);
+                console.log("✅ Voice Sent!");
                 return;
+            } else {
+                console.log("⚠️ Voice generation failed, sending text.");
             }
         }
 
-        // Fallback to text
         await sock.sendMessage(sender, { text: reply }, { quoted: msg });
         memory = await loadUserMemory(sender);
         if (memory.length) memory[memory.length - 1].type = "text";
@@ -299,4 +310,5 @@ async function attachLlmAiLogic(sock) {
     });
 }
 
-module.exports = { attachLlmAiLogic };
+// Export as attachAiLogic to match api.js
+module.exports = { attachAiLogic };
