@@ -231,8 +231,8 @@ async function getReply(jid, annotatedMessage, senderName = "yaar") {
 
 // —— MAIN LOGIC EXPORT —————————————————————————————
 
-// Renamed back to 'attachAiLogic' so api.js works without changes
-async function attachAiLogic(sock) {
+// Renamed back to 'attachLlmAiLogic' so api.js works without changes
+async function attachLlmAiLogic(sock) {
     console.log("🤖 Enhanced Mohini AI Attached!");
     console.log(`🎭 Initial Mood: ${currentMood.toUpperCase()}`);
 
@@ -310,5 +310,5 @@ async function attachAiLogic(sock) {
     });
 }
 
-// Export as attachAiLogic to match api.js
-module.exports = { attachAiLogic };
+// Export as attachLlmAiLogic to match api.js
+module.exports = { attachLlmAiLogic };
