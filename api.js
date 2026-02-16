@@ -10,6 +10,8 @@ const fs = require("fs");
 const path = require("path");
 const pino = require("pino");
 const qrcode = require("qrcode-terminal"); // <--- Import the new library
+const { startAiBot } = require("./localAudio");
+
 
 // —— CONFIGURATION —————————————————————————————————
 const PORT = 3000;
@@ -160,10 +162,18 @@ app.post("/send-message", authMiddleware, async (req, res) => {
     }
 });
 
+
+
+    
+
 // —— START SERVER ——————————————————————————————————
 app.listen(PORT, () => {
     console.log(`🚀 API Server running on port ${PORT}`);
     console.log(`🔒 Edit 'api_config.json' to manage Access Keys and IPs`);
 
     startWhatsApp();
+
+    // Start the AI Bot Loop
+    startAiBot();
 });
+

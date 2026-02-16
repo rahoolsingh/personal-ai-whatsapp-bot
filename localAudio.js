@@ -154,7 +154,7 @@ async function getReply(jid, annotatedMessage, senderName = "yaar") {
 }
 
 // —— MAIN BOT LOOP —————————————————————————————
-async function startBot() {
+async function startAiBot() {
     const { state, saveCreds } = await useMultiFileAuthState(
         path.join(__dirname, "auth_info_baileys")
     );
@@ -276,4 +276,4 @@ async function startBot() {
     });
 }
 
-startBot();
+module.exports = { startAiBot};
