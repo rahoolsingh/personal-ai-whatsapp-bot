@@ -10,7 +10,7 @@ const fs = require("fs");
 const path = require("path");
 const pino = require("pino");
 const qrcode = require("qrcode-terminal");
-const { attachAiLogic } = require("./localAudio"); // Import the logic
+const { attachLlmAiLogic } = require("./llmAiBot");
 
 // —— CONFIGURATION —————————————————————————————————
 const PORT = 3000;
@@ -95,7 +95,7 @@ async function startWhatsApp() {
 
     // START THE AI BOT LISTENER HERE
     // Pass the socket to the AI logic
-    attachAiLogic(sock);
+    attachLlmAiLogic(sock);
 }
 
 // —— API ROUTES ————————————————————————————————————

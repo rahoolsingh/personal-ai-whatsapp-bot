@@ -32,7 +32,7 @@ async function ttsToOpus(text) {
         fs.unlinkSync(tempOgg);
         return opusBuffer;
     } catch (e) {
-        console.error("TTS Error:", e);
+        console.error("TTS/FFmpeg Error:", e.message);
         return null;
     }
 }
@@ -52,7 +52,7 @@ function renderSessionTable() {
         "Total Chats": info.count,
         "Last Seen": new Date(info.lastSeen).toLocaleString("en-IN"),
     }));
-    // console.clear(); // Optional: clears terminal too often
+    // console.clear(); 
     console.log("📊 Active Chat Stats");
     console.table(rows);
 }
@@ -77,10 +77,6 @@ async function saveUserMemory(jid, memory) {
 async function deleteUserMemory(jid) {
     const file = getMemoryPath(jid);
     if (fs.existsSync(file)) {
-        const ts = new Date().toISOString().replace(/[:.]/g, "-");
-        const dest = path.join(trashDir, `${jid}-${ts}.json`);
-        const mem = JSON.parse(fs.readFileSync(file, "utf-8"));
-        fs.writeFileSync(dest, JSON.stringify({ resetAt: new Date().toISOString(), memory: mem }, null, 2), "utf-8");
         fs.unlinkSync(file);
     }
 }
@@ -113,7 +109,8 @@ async function getReply(jid, annotatedMessage, senderName = "yaar") {
     if (memory.length > 20) memory = memory.slice(-20);
 
     try {
-        const res = await axios.post("http://host.docker.internal:11434/api/chat", { // Changed to host.docker.internal for Docker
+        // CHANGED: Using standard Linux Docker host IP 172.17.0.1
+        const res = await axios.post("http://172.17.0.1:11434/api/chat", {
             model: "gemma3:12b",
             messages: memory,
             stream: false,
@@ -123,13 +120,13 @@ async function getReply(jid, annotatedMessage, senderName = "yaar") {
         await saveUserMemory(jid, memory);
         return reply;
     } catch (e) {
-        console.error("Ollama Error:", e.message);
-        return "Server ka mood kharab hai 😓 Try again later!";
+        console.error("Ollama Connect Error:", e.message);
+        // Return text so the user knows something is wrong but gets a reply
+        return "Brain not connected! (Ollama Error)";
     }
 }
 
 // —— MAIN BOT LOGIC ATTACHMENT —————————————————————————————
-// This function takes the EXISTING socket from api.js
 async function attachAiLogic(sock) {
     console.log("🤖 AI Logic Attached to WhatsApp Socket");
 
@@ -144,10 +141,8 @@ async function attachAiLogic(sock) {
         const botJid = selfJid();
         const author = msg.key.participant || msg.key.remoteJid;
 
-        // Ignore status updates
         if (sender === "status@broadcast") return;
 
-        // Extract or OCR text
         let text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
         if (msg.message.imageMessage) {
             const ocr = await extractTextFromImage(msg.message.imageMessage);
@@ -156,16 +151,13 @@ async function attachAiLogic(sock) {
 
         const ctx = msg.message.extendedTextMessage?.contextInfo || {};
         const mentioned = ctx.mentionedJid || [];
-        const quoted = ctx.quotedMessage;
 
-        // Reset command
         if (text.trim().toLowerCase() === "!reset") {
             await deleteUserMemory(sender);
             return sock.sendMessage(sender, { text: "🧹 Memory reset!" });
         }
 
-        // Decide reply eligibility
-        let shouldReply = !isGroup; // DMs always
+        let shouldReply = !isGroup;
         if (isGroup) {
             const isMention = mentioned.includes(botJid);
             const isReplyToMe = ctx.participant === botJid;
@@ -174,7 +166,7 @@ async function attachAiLogic(sock) {
         }
         if (!shouldReply) return;
 
-        // Update stats
+        // Stats
         const stats = sessionStats.get(sender) || { name: msg.pushName || "yaar", count: 0, lastSeen: Date.now() };
         stats.name = msg.pushName || stats.name;
         stats.count += 1;
@@ -182,7 +174,7 @@ async function attachAiLogic(sock) {
         sessionStats.set(sender, stats);
         renderSessionTable();
 
-        // Annotate for memory
+        // Prepare context
         let annotated = text;
         if (isGroup) {
             const shortJid = author.replace(/@.+/, "");
@@ -190,22 +182,22 @@ async function attachAiLogic(sock) {
             annotated = `<${shortJid}><${displayName}>: ${text}`;
         }
 
-        // Simulate typing
-        const delay = 1000 + Math.random() * 1000;
         await sock.sendPresenceUpdate("recording", sender);
 
-        // Get Reply
+        // 1. Get Text Reply
         const reply = await getReply(sender, annotated, msg.pushName || "yaar");
 
-        // Send Reply (Audio or Text)
+        // 2. Try Audio, FAIL SAFE to Text
         try {
+            console.log("Attempting Audio Generation...");
             const opus = await ttsToOpus(reply);
-            if (opus) {
-                await sock.sendMessage(sender, { audio: opus, mimetype: "audio/ogg; codecs=opus", ptt: true }, { quoted: msg });
-            } else {
-                throw new Error("TTS failed");
-            }
+
+            if (!opus) throw new Error("Audio generation returned null (Check FFmpeg/TTS)");
+
+            await sock.sendMessage(sender, { audio: opus, mimetype: "audio/ogg; codecs=opus", ptt: true }, { quoted: msg });
+            console.log("✅ Audio Sent");
         } catch (err) {
+            console.error(`⚠️ Audio Failed: ${err.message}. Sending TEXT fallback.`);
             await sock.sendMessage(sender, { text: reply }, { quoted: msg });
         }
     });

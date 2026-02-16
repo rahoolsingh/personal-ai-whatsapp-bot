@@ -1,6 +1,8 @@
 # Use a lightweight Node.js image
 FROM node:22-alpine
 
+RUN apt-get update && apt-get install -y ffmpeg
+
 # Set the working directory inside the container
 WORKDIR /app
 
