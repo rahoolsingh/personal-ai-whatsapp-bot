@@ -99,19 +99,22 @@ async function generateTTS(text) {
     try {
         const cleanText = text.replace(/[*_~`]/g, "").trim();
         const speechText = `Say in a warm and friendly tone: ${cleanText}`;
-        
+
         // NOTE: Ensure process.env.GEMINI_API_KEY is set in docker-compose.yml
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${process.env.GEMINI_API_KEY}`;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`;
 
         const payload = {
             contents: [{ parts: [{ text: speechText }] }],
-            generationConfig: {
-                responseModalities: ["AUDIO"],
-                speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } },
-            },
+            generationConfig: { maxOutputTokens: 200, temperature: 0.9 }
         };
 
-        const res = await axios.post(url, payload, { headers: { "Content-Type": "application/json" } });
+        const res = await axios.post(url, payload, {
+            headers: {
+                "Content-Type": "application/json",
+                "x-goog-api-key": process.env.GEMINI_API_KEY,
+
+            }
+        });
 
         if (!res?.data?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) return null;
 
@@ -157,7 +160,7 @@ async function extractTextFromImage(imageMessage) {
 
 async function getReply(jid, annotatedMessage, senderName = "yaar") {
     let memory = await loadUserMemory(jid);
-    
+
     // System Prompt Injection
     if (memory.length === 0 || !memory.find(msg => msg.role === "system")) {
         const systemPrompt = {
@@ -173,7 +176,7 @@ async function getReply(jid, annotatedMessage, senderName = "yaar") {
     }
 
     memory.push({ role: "user", content: annotatedMessage });
-    
+
     // Trim memory
     if (memory.length > 20) {
         const system = memory.filter(m => m.role === "system");
@@ -188,7 +191,7 @@ async function getReply(jid, annotatedMessage, senderName = "yaar") {
                 role: msg.role === "assistant" ? "model" : "user",
                 parts: [{ text: msg.content }],
             }));
-        
+
         const systemPart = memory.find(m => m.role === "system")?.content || "";
 
         const res = await axios.post(
@@ -201,7 +204,7 @@ async function getReply(jid, annotatedMessage, senderName = "yaar") {
         );
 
         const reply = res?.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "Arre yaar, server slow hai 😅";
-        
+
         memory.push({ role: "assistant", content: reply, type: "pending" });
         await saveUserMemory(jid, memory);
         return reply;
@@ -227,7 +230,7 @@ async function attachLlmAiLogic(sock) {
         const sender = msg.key.remoteJid;
         const isGroup = sender.endsWith("@g.us");
         const botJid = selfJid();
-        
+
         // Skip status/broadcasts
         if (sender === "status@broadcast") return;
 
@@ -264,9 +267,9 @@ async function attachLlmAiLogic(sock) {
         // Get Reply
         let annotated = text;
         if (isGroup) annotated = `<${msg.pushName}>: ${text}`;
-        
+
         const reply = await getReply(sender, annotated, msg.pushName);
-        
+
         // Voice vs Text Decision
         const isVoiceRequested = checkVoiceRequest(text);
         let memory = await loadUserMemory(sender);
@@ -275,14 +278,14 @@ async function attachLlmAiLogic(sock) {
         if (useVoice) {
             await sock.sendPresenceUpdate("recording", sender);
             const audioPath = await generateTTS(reply);
-            
+
             if (audioPath) {
                 await sock.sendMessage(sender, { audio: fs.readFileSync(audioPath), mimetype: "audio/ogg; codecs=opus", ptt: true }, { quoted: msg });
                 fs.unlinkSync(audioPath); // Cleanup
-                
+
                 // Update memory type
                 memory = await loadUserMemory(sender);
-                if(memory.length) memory[memory.length-1].type = "voice";
+                if (memory.length) memory[memory.length - 1].type = "voice";
                 await saveUserMemory(sender, memory);
                 return;
             }
@@ -291,7 +294,7 @@ async function attachLlmAiLogic(sock) {
         // Fallback to text
         await sock.sendMessage(sender, { text: reply }, { quoted: msg });
         memory = await loadUserMemory(sender);
-        if(memory.length) memory[memory.length-1].type = "text";
+        if (memory.length) memory[memory.length - 1].type = "text";
         await saveUserMemory(sender, memory);
     });
 }
