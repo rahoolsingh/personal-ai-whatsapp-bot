@@ -20,8 +20,8 @@ async function textToVoiceNote(text) {
     try {
         // 1. Get MP3 URL from Google TTS (Free)
         // Split text if it's too long (Google TTS limit is ~200 chars)
-        const safeText = text.substring(0, 200); 
-        
+        const safeText = text.substring(0, 200);
+
         const url = googleTTS.getAudioUrl(safeText, {
             lang: "en",
             slow: false,
@@ -30,7 +30,7 @@ async function textToVoiceNote(text) {
 
         // 2. Download MP3
         const mp3Buffer = await axios.get(url, { responseType: "arraybuffer" }).then((r) => Buffer.from(r.data));
-        
+
         const tempMp3 = path.join(tempDir, `input_${Date.now()}.mp3`);
         const tempOgg = path.join(tempDir, `voice_${Date.now()}.ogg`);
 
@@ -40,7 +40,7 @@ async function textToVoiceNote(text) {
         return new Promise((resolve, reject) => {
             ffmpeg(tempMp3)
                 .outputOptions([
-                    "-c:a libopus", 
+                    "-c:a libopus",
                     "-b:a 16k",
                     "-vbr on"
                 ])
@@ -114,7 +114,11 @@ async function getReply(jid, userMessage) {
                 parts: msg.parts.map(part => ({ text: part.text }))
             })),
             // max 2 lines of output token
-            maxOutputTokens: 100,
+            generationConfig: {
+                maxOutputTokens: 100, // Approx 2 lines of text
+                temperature: 0.7, // Creativity
+                topP: 0.9, // Nucleus sampling - focus on top 90% of probability mass
+            }
         };
 
         const res = await axios.post(
@@ -129,11 +133,11 @@ async function getReply(jid, userMessage) {
         );
 
         const reply = res.data?.candidates?.[0]?.content?.parts?.[0]?.text || "System Error";
-        
+
         // Save Assistant Reply
         memory.push({ role: "model", parts: [{ text: reply }] });
         await saveUserMemory(jid, memory);
-        
+
         return reply;
 
     } catch (err) {
@@ -181,12 +185,12 @@ async function attachLlmAiLogic(sock) {
         // 5. SEND AUDIO (Always Second)
         const audioPath = await textToVoiceNote(replyText);
         if (audioPath) {
-            await sock.sendMessage(sender, { 
-                audio: fs.readFileSync(audioPath), 
-                mimetype: "audio/ogg; codecs=opus", 
-                ptt: true 
+            await sock.sendMessage(sender, {
+                audio: fs.readFileSync(audioPath),
+                mimetype: "audio/ogg; codecs=opus",
+                ptt: true
             }, { quoted: msg });
-            
+
             fs.unlinkSync(audioPath); // Cleanup
             console.log("✅ Audio Sent");
         } else {
