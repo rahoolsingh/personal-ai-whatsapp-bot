@@ -174,10 +174,10 @@ async function startAiBot() {
         if (
             update.connection === "close" &&
             update.lastDisconnect?.error?.output?.statusCode !==
-                DisconnectReason.loggedOut
+            DisconnectReason.loggedOut
         ) {
             console.log("🔄 Reconnecting...");
-            startBot();
+            startAiBot();
         }
     });
 
@@ -276,4 +276,4 @@ async function startAiBot() {
     });
 }
 
-module.exports = { startAiBot};
+module.exports = { startAiBot };
