@@ -1,43 +1,40 @@
-const {
-    default: makeWASocket,
-    useMultiFileAuthState,
-    fetchLatestBaileysVersion,
-    DisconnectReason,
-} = require("baileys");
 const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
 const { createWorker } = require("tesseract.js");
-
 const googleTTS = require("google-tts-api");
-const ffmpeg = require("fluent-ffmpeg"); // for MP3 -> Opus
+const ffmpeg = require("fluent-ffmpeg");
 
 // —– helper to convert TTS (MP3) to Opus ——
 async function ttsToOpus(text) {
-    // 1. Download TTS first
-    const url = googleTTS.getAudioUrl(text, { lang: "en", slow: false });
-    const mp3Buffer = await axios({ url, responseType: "arraybuffer" }).then(
-        (r) => Buffer.from(r.data)
-    );
+    try {
+        const url = googleTTS.getAudioUrl(text, { lang: "en", slow: false });
+        const mp3Buffer = await axios({ url, responseType: "arraybuffer" }).then(
+            (r) => Buffer.from(r.data)
+        );
 
-    fs.writeFileSync("input.mp3", mp3Buffer);
+        const tempMp3 = path.join(__dirname, `input-${Date.now()}.mp3`);
+        const tempOgg = path.join(__dirname, `output-${Date.now()}.ogg`);
 
-    // 2. Convert to Opus
-    await new Promise((resolve, reject) => {
-        ffmpeg("input.mp3")
-            .outputOptions(["-acodec libopus", "-ab 64k", "-vbr on"])
-            .toFormat("ogg")
-            .save("output.ogg")
-            .on("end", resolve)
-            .on("error", reject);
-    });
+        fs.writeFileSync(tempMp3, mp3Buffer);
 
-    const opusBuffer = fs.readFileSync("output.ogg");
+        await new Promise((resolve, reject) => {
+            ffmpeg(tempMp3)
+                .outputOptions(["-acodec libopus", "-ab 64k", "-vbr on"])
+                .toFormat("ogg")
+                .save(tempOgg)
+                .on("end", resolve)
+                .on("error", reject);
+        });
 
-    fs.unlinkSync("input.mp3"); // Cleanup
-    fs.unlinkSync("output.ogg"); // Cleanup
-
-    return opusBuffer;
+        const opusBuffer = fs.readFileSync(tempOgg);
+        fs.unlinkSync(tempMp3);
+        fs.unlinkSync(tempOgg);
+        return opusBuffer;
+    } catch (e) {
+        console.error("TTS Error:", e);
+        return null;
+    }
 }
 
 // —— CONFIG & STATE —————————————————————————————
@@ -55,7 +52,7 @@ function renderSessionTable() {
         "Total Chats": info.count,
         "Last Seen": new Date(info.lastSeen).toLocaleString("en-IN"),
     }));
-    console.clear();
+    // console.clear(); // Optional: clears terminal too often
     console.log("📊 Active Chat Stats");
     console.table(rows);
 }
@@ -74,11 +71,7 @@ async function loadUserMemory(jid) {
 }
 
 async function saveUserMemory(jid, memory) {
-    fs.writeFileSync(
-        getMemoryPath(jid),
-        JSON.stringify(memory, null, 2),
-        "utf-8"
-    );
+    fs.writeFileSync(getMemoryPath(jid), JSON.stringify(memory, null, 2), "utf-8");
 }
 
 async function deleteUserMemory(jid) {
@@ -87,36 +80,20 @@ async function deleteUserMemory(jid) {
         const ts = new Date().toISOString().replace(/[:.]/g, "-");
         const dest = path.join(trashDir, `${jid}-${ts}.json`);
         const mem = JSON.parse(fs.readFileSync(file, "utf-8"));
-        fs.writeFileSync(
-            dest,
-            JSON.stringify(
-                { resetAt: new Date().toISOString(), memory: mem },
-                null,
-                2
-            ),
-            "utf-8"
-        );
+        fs.writeFileSync(dest, JSON.stringify({ resetAt: new Date().toISOString(), memory: mem }, null, 2), "utf-8");
         fs.unlinkSync(file);
     }
 }
 
 async function extractTextFromImage(imageMessage) {
     try {
-        const buffer = await axios
-            .get(imageMessage.url || imageMessage.directPath, {
-                responseType: "arraybuffer",
-            })
-            .then((r) => Buffer.from(r.data));
-        const worker = createWorker();
-        await worker.load();
-        await worker.loadLanguage("eng");
-        await worker.initialize("eng");
-        const {
-            data: { text },
-        } = await worker.recognize(buffer);
+        const buffer = await axios.get(imageMessage.url || imageMessage.directPath, { responseType: "arraybuffer" }).then((r) => Buffer.from(r.data));
+        const worker = await createWorker("eng");
+        const { data: { text } } = await worker.recognize(buffer);
         await worker.terminate();
         return text.trim();
-    } catch {
+    } catch (e) {
+        console.error("OCR Error:", e.message);
         return "";
     }
 }
@@ -132,54 +109,31 @@ async function getReply(jid, annotatedMessage, senderName = "yaar") {
         });
     }
 
-    // Store the annotated user line exactly
     memory.push({ role: "user", content: annotatedMessage });
-
     if (memory.length > 20) memory = memory.slice(-20);
 
     try {
-        const res = await axios.post("http://localhost:11434/api/chat", {
+        const res = await axios.post("http://host.docker.internal:11434/api/chat", { // Changed to host.docker.internal for Docker
             model: "gemma3:12b",
             messages: memory,
             stream: false,
         });
-        const reply =
-            res.data?.message?.content?.trim() || "Arre bata na clearly 😅";
+        const reply = res.data?.message?.content?.trim() || "Arre bata na clearly 😅";
         memory.push({ role: "assistant", content: reply });
         await saveUserMemory(jid, memory);
         return reply;
-    } catch {
+    } catch (e) {
+        console.error("Ollama Error:", e.message);
         return "Server ka mood kharab hai 😓 Try again later!";
     }
 }
 
-// —— MAIN BOT LOOP —————————————————————————————
-async function startAiBot() {
-    const { state, saveCreds } = await useMultiFileAuthState(
-        path.join(__dirname, "auth_info_baileys")
-    );
-    const { version } = await fetchLatestBaileysVersion();
-    const sock = makeWASocket({
-        version,
-        auth: state,
-        printQRInTerminal: true,
-    });
+// —— MAIN BOT LOGIC ATTACHMENT —————————————————————————————
+// This function takes the EXISTING socket from api.js
+async function attachAiLogic(sock) {
+    console.log("🤖 AI Logic Attached to WhatsApp Socket");
 
-    sock.ev.on("creds.update", saveCreds);
     const selfJid = () => sock.user?.id.split(":")[0] + "@s.whatsapp.net";
-
-    sock.ev.on("connection.update", (update) => {
-        if (update.qr) console.log("📱 Scan this QR:\n", update.qr);
-        if (update.connection === "open") console.log("✅ Mohini is online!");
-        if (
-            update.connection === "close" &&
-            update.lastDisconnect?.error?.output?.statusCode !==
-            DisconnectReason.loggedOut
-        ) {
-            console.log("🔄 Reconnecting...");
-            startAiBot();
-        }
-    });
 
     sock.ev.on("messages.upsert", async ({ messages }) => {
         const msg = messages[0];
@@ -189,13 +143,12 @@ async function startAiBot() {
         const isGroup = sender.endsWith("@g.us");
         const botJid = selfJid();
         const author = msg.key.participant || msg.key.remoteJid;
-        if (author === botJid) return;
+
+        // Ignore status updates
+        if (sender === "status@broadcast") return;
 
         // Extract or OCR text
-        let text =
-            msg.message.conversation ||
-            msg.message.extendedTextMessage?.text ||
-            "";
+        let text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
         if (msg.message.imageMessage) {
             const ocr = await extractTextFromImage(msg.message.imageMessage);
             text = ocr || "Image received";
@@ -222,18 +175,14 @@ async function startAiBot() {
         if (!shouldReply) return;
 
         // Update stats
-        const stats = sessionStats.get(sender) || {
-            name: msg.pushName || "yaar",
-            count: 0,
-            lastSeen: Date.now(),
-        };
+        const stats = sessionStats.get(sender) || { name: msg.pushName || "yaar", count: 0, lastSeen: Date.now() };
         stats.name = msg.pushName || stats.name;
         stats.count += 1;
         stats.lastSeen = Date.now();
         sessionStats.set(sender, stats);
         renderSessionTable();
 
-        // Annotate for memory: <jid><name>: message
+        // Annotate for memory
         let annotated = text;
         if (isGroup) {
             const shortJid = author.replace(/@.+/, "");
@@ -241,39 +190,25 @@ async function startAiBot() {
             annotated = `<${shortJid}><${displayName}>: ${text}`;
         }
 
-        // Simulate typing & fetch reply in parallel
+        // Simulate typing
         const delay = 1000 + Math.random() * 1000;
-        const typing = sock
-            .sendPresenceUpdate("recording", sender)
-            .then(() => new Promise((r) => setTimeout(r, delay)));
-        const replyP = getReply(sender, annotated, msg.pushName || "yaar");
-        await Promise.all([typing, replyP]);
-        const reply = await replyP;
+        await sock.sendPresenceUpdate("recording", sender);
 
-        // Preserve quoted context
-        let prefix = "";
-        if (quoted) {
-            const orig =
-                Object.values(quoted)[0].text ||
-                Object.values(quoted)[0].conversation ||
-                Object.values(quoted)[0].caption;
-            if (orig) prefix = `💬 "${orig}"\n`;
-        }
-        // Prepare a context-aware reply first
+        // Get Reply
+        const reply = await getReply(sender, annotated, msg.pushName || "yaar");
 
-        // Try TTS first
+        // Send Reply (Audio or Text)
         try {
             const opus = await ttsToOpus(reply);
-            await sock.sendMessage(
-                sender,
-                { audio: opus, mimetype: "audio/ogg; codecs=opus", ptt: true },
-                { quoted: msg }
-            );
+            if (opus) {
+                await sock.sendMessage(sender, { audio: opus, mimetype: "audio/ogg; codecs=opus", ptt: true }, { quoted: msg });
+            } else {
+                throw new Error("TTS failed");
+            }
         } catch (err) {
-            console.log("TTS failed, falling back to text.", err);
             await sock.sendMessage(sender, { text: reply }, { quoted: msg });
         }
     });
 }
 
-module.exports = { startAiBot };
+module.exports = { attachAiLogic };
