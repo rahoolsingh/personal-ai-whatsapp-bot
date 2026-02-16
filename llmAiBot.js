@@ -94,7 +94,7 @@ async function extractTextFromImage(imageMessage) {
     } catch { return ""; }
 }
 
-// —— GEMINI API (Simple Version) ——————————————————
+// —— GEMINI API (System Prompt Added) ——————————————
 async function getReply(jid, userMessage) {
     let memory = await loadUserMemory(jid);
 
@@ -107,31 +107,35 @@ async function getReply(jid, userMessage) {
     }
 
     try {
-        // EXACT Structure you requested
         const payload = {
+            // SYSTEM INSTRUCTION: Defines the persona and brevity
+            systemInstruction: {
+                parts: [
+                    {
+                        text: "You are Mohini, a smart, witty, and friendly assistant. Reply like a real human: short, direct, and casual. Keep answers under 40 words. No robotic lists or markdown. Use natural language."
+                    }
+                ]
+            },
             contents: memory.map(msg => ({
                 role: msg.role,
                 parts: msg.parts.map(part => ({ text: part.text }))
             })),
-            // max 2 lines of output token
+            // GENERATION CONFIG: Enforce brevity
             generationConfig: {
-                maxOutputTokens: 500, // Approx 2 lines of text
-                temperature: 0.7, // Creativity
+                maxOutputTokens: 60, // Limit tokens strictly
+                temperature: 0.7     // Slight creativity but stable
             }
         };
 
         const res = await axios.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
             payload,
             {
-                headers: {
-                    "Content-Type": "application/json",
-                    "x-goog-api-key": process.env.GEMINI_API_KEY
-                }
+                headers: { "Content-Type": "application/json" }
             }
         );
 
-        const reply = res.data?.candidates?.[0]?.content?.parts?.[0]?.text || "System Error";
+        const reply = res.data?.candidates?.[0]?.content?.parts?.[0]?.text || "Got it.";
 
         // Save Assistant Reply
         memory.push({ role: "model", parts: [{ text: reply }] });
@@ -141,13 +145,13 @@ async function getReply(jid, userMessage) {
 
     } catch (err) {
         console.error("Gemini API Error:", err.message);
-        return "Sorry, I am having trouble connecting to my brain right now.";
+        return "Can't talk right now.";
     }
 }
 
 // —— MAIN BOT LOGIC ———————————————————————————————
 async function attachLlmAiLogic(sock) {
-    console.log("🤖 Mohini AI Attached (Text + Audio Mode)");
+    console.log("🤖 Mohini AI Attached (Brief Human Mode)");
 
     sock.ev.on("messages.upsert", async ({ messages }) => {
         const msg = messages[0];
@@ -199,4 +203,3 @@ async function attachLlmAiLogic(sock) {
 }
 
 module.exports = { attachLlmAiLogic };
-
