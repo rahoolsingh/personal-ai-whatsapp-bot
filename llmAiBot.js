@@ -112,7 +112,9 @@ async function getReply(jid, userMessage) {
             contents: memory.map(msg => ({
                 role: msg.role,
                 parts: msg.parts.map(part => ({ text: part.text }))
-            }))
+            })),
+            // max 2 lines of output token
+            maxOutputTokens: 100,
         };
 
         const res = await axios.post(
