@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
-const googleTTS = require("google-tts-api"); // <--- Free TTS Library
+const googleTTS = require("google-tts-api");
 const ffmpeg = require("fluent-ffmpeg");
 const { createWorker } = require("tesseract.js");
 
@@ -15,19 +15,20 @@ const tempDir = path.join(__dirname, "temp");
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 });
 
-// —— HELPER FUNCTIONS —————————————————————————————
-
-// 1. Generate Audio using Free Google TTS + FFmpeg
+// —— HELPER: Free Audio Generation —————————————————
 async function textToVoiceNote(text) {
     try {
-        // 1. Get MP3 URL from Google TTS (Free, no key)
-        const url = googleTTS.getAudioUrl(text, {
-            lang: "en", // You can change to 'hi' for Hindi accent
+        // 1. Get MP3 URL from Google TTS (Free)
+        // Split text if it's too long (Google TTS limit is ~200 chars)
+        const safeText = text.substring(0, 200); 
+        
+        const url = googleTTS.getAudioUrl(safeText, {
+            lang: "en",
             slow: false,
             host: "https://translate.google.com",
         });
 
-        // 2. Download the MP3
+        // 2. Download MP3
         const mp3Buffer = await axios.get(url, { responseType: "arraybuffer" }).then((r) => Buffer.from(r.data));
         
         const tempMp3 = path.join(tempDir, `input_${Date.now()}.mp3`);
@@ -35,19 +36,18 @@ async function textToVoiceNote(text) {
 
         fs.writeFileSync(tempMp3, mp3Buffer);
 
-        // 3. Convert MP3 to WhatsApp Voice Note (Opus/Ogg) using FFmpeg
+        // 3. Convert to WhatsApp Voice Note (Ogg/Opus)
         return new Promise((resolve, reject) => {
             ffmpeg(tempMp3)
                 .outputOptions([
                     "-c:a libopus", 
-                    "-b:a 16k",      // Low bitrate for voice
-                    "-vbr on", 
-                    "-compression_level 10"
+                    "-b:a 16k",
+                    "-vbr on"
                 ])
                 .toFormat("ogg")
                 .save(tempOgg)
                 .on("end", () => {
-                    fs.unlinkSync(tempMp3); // Cleanup MP3
+                    if (fs.existsSync(tempMp3)) fs.unlinkSync(tempMp3);
                     resolve(tempOgg);
                 })
                 .on("error", (err) => {
@@ -57,12 +57,12 @@ async function textToVoiceNote(text) {
                 });
         });
     } catch (err) {
-        console.error("TTS Generation Error:", err.message);
+        console.error("TTS Error:", err.message);
         return null;
     }
 }
 
-// 2. Memory Management
+// —— HELPER: User Memory ——————————————————————————
 function getMemoryPath(jid) {
     return path.join(memoryDir, `${jid}.json`);
 }
@@ -83,7 +83,7 @@ async function deleteUserMemory(jid) {
     if (fs.existsSync(file)) fs.unlinkSync(file);
 }
 
-// 3. Image OCR
+// —— HELPER: OCR ——————————————————————————————————
 async function extractTextFromImage(imageMessage) {
     try {
         const buffer = await axios.get(imageMessage.url || imageMessage.directPath, { responseType: "arraybuffer" }).then(r => Buffer.from(r.data));
@@ -94,67 +94,52 @@ async function extractTextFromImage(imageMessage) {
     } catch { return ""; }
 }
 
-// 4. Gemini 2.5 Logic (Text Only)
-async function getReply(jid, annotatedMessage) {
+// —— GEMINI API (Simple Version) ——————————————————
+async function getReply(jid, userMessage) {
     let memory = await loadUserMemory(jid);
 
-    // Initial Personality Setup
-    if (memory.length === 0) {
-        memory.unshift({
-            role: "system",
-            content: `You are Mohini, a witty and friendly AI assistant.
-            - Keep answers short (under 30 words) because you are speaking in audio.
-            - Use natural, conversational English (or Hinglish if the user speaks Hindi).
-            - Do not use emojis, lists, or code blocks (since this is for voice).`
-        });
-    }
+    // Add User Message to History
+    memory.push({ role: "user", parts: [{ text: userMessage }] });
 
-    memory.push({ role: "user", content: annotatedMessage });
-
-    // Keep memory small for speed
-    if (memory.length > 12) {
-        const sys = memory[0];
-        const recent = memory.slice(-10);
-        memory = [sys, ...recent];
+    // Keep memory short (Last 10 messages)
+    if (memory.length > 10) {
+        memory = memory.slice(-10);
     }
 
     try {
-        const contextMessages = memory
-            .filter(msg => msg.role !== "system")
-            .map(msg => ({
-                role: msg.role === "assistant" ? "model" : "user",
-                parts: [{ text: msg.content }],
-            }));
-
-        const systemPart = memory[0].content;
+        // EXACT Structure you requested
+        const payload = {
+            contents: memory
+        };
 
         const res = await axios.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`,
+            payload,
             {
-                contents: contextMessages,
-                systemInstruction: { parts: [{ text: systemPart }] },
-                generationConfig: { maxOutputTokens: 100, temperature: 0.7 }
+                headers: {
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": process.env.GEMINI_API_KEY
+                }
             }
         );
 
-        const reply = res?.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "Sorry, I couldn't think of a reply.";
+        const reply = res.data?.candidates?.[0]?.content?.parts?.[0]?.text || "System Error";
         
-        memory.push({ role: "assistant", content: reply });
+        // Save Assistant Reply
+        memory.push({ role: "model", parts: [{ text: reply }] });
         await saveUserMemory(jid, memory);
+        
         return reply;
 
     } catch (err) {
         console.error("Gemini API Error:", err.message);
-        return "My brain is offline right now.";
+        return "Sorry, I am having trouble connecting to my brain right now.";
     }
 }
 
-// —— MAIN EXPORT —————————————————————————————
-
+// —— MAIN BOT LOGIC ———————————————————————————————
 async function attachLlmAiLogic(sock) {
-    console.log("🤖 Mohini AI (Voice Mode) Attached!");
-
-    const selfJid = () => sock.user?.id.split(":")[0] + "@s.whatsapp.net";
+    console.log("🤖 Mohini AI Attached (Text + Audio Mode)");
 
     sock.ev.on("messages.upsert", async ({ messages }) => {
         const msg = messages[0];
@@ -163,7 +148,7 @@ async function attachLlmAiLogic(sock) {
         const sender = msg.key.remoteJid;
         if (sender === "status@broadcast") return;
 
-        // 1. Extract Text
+        // 1. Get Text (or OCR)
         let text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
         if (msg.message.imageMessage) {
             text = await extractTextFromImage(msg.message.imageMessage) || "Image received";
@@ -171,41 +156,39 @@ async function attachLlmAiLogic(sock) {
 
         if (!text) return;
 
-        // 2. Commands
-        if (text.toLowerCase() === "!reset") {
+        // 2. Handle !reset
+        if (text.trim().toLowerCase() === "!reset") {
             await deleteUserMemory(sender);
-            await sock.sendMessage(sender, { text: "Memory cleared." });
+            await sock.sendMessage(sender, { text: "Memory cleared!" });
             return;
         }
 
-        console.log(`📩 Message from ${sender}: ${text.substring(0, 20)}...`);
-
-        // 3. Send Typing Indicator
+        console.log(`📩 ${sender}: ${text}`);
         await sock.sendPresenceUpdate("recording", sender);
 
-        // 4. Get Text Reply from Gemini
+        // 3. Get Gemini Reply
         const replyText = await getReply(sender, text);
 
-        // 5. Generate Audio (Free)
-        const audioPath = await textToVoiceNote(replyText);
+        // 4. SEND TEXT (Always First)
+        await sock.sendMessage(sender, { text: replyText }, { quoted: msg });
+        console.log("✅ Text Sent");
 
+        // 5. SEND AUDIO (Always Second)
+        const audioPath = await textToVoiceNote(replyText);
         if (audioPath) {
-            // 6. Send Voice Note
             await sock.sendMessage(sender, { 
                 audio: fs.readFileSync(audioPath), 
                 mimetype: "audio/ogg; codecs=opus", 
-                ptt: true // This makes it a "Voice Note" (green waveform)
+                ptt: true 
             }, { quoted: msg });
             
-            // Cleanup
-            fs.unlinkSync(audioPath);
-            console.log("✅ Audio sent!");
+            fs.unlinkSync(audioPath); // Cleanup
+            console.log("✅ Audio Sent");
         } else {
-            // Fallback if audio fails
-            console.log("⚠️ Audio generation failed, sending text.");
-            await sock.sendMessage(sender, { text: replyText }, { quoted: msg });
+            console.log("⚠️ Audio generation failed (Text only sent)");
         }
     });
 }
 
 module.exports = { attachLlmAiLogic };
+
